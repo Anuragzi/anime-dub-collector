@@ -1,0 +1,19 @@
+{
+  "name": "anime-dub-news-collector",
+  "version": "1.0.0",
+  "description": "Background service that collects English dub anime updates from multiple sources and stores them in Firebase.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "dotenv": "^16.6.1",
+    "firebase-admin": "^12.0.0",
+    "node-cron": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

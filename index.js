@@ -17,7 +17,7 @@ require("dotenv").config();
 const cron = require("node-cron");
 const { initFirebase, getDb } = require("./firebase");
 const { fetchAnimeSchedule } = require("./services/fetchAnimeSchedule");
-const { fetchReddit } = require("./services/fetchReddit");
+// const { fetchReddit } = require("./services/fetchReddit");
 const { fetchTwitter } = require("./services/fetchTwitter");
 const { makeDocId } = require("./utils/normalizeTitle");
 
@@ -193,18 +193,18 @@ async function runCollection() {
   }
 
   // ── SOURCE 2: Reddit ────────────────────────────────────
-  log("INFO", "Fetching from Reddit...");
-  try {
-    const rdUpdates = await fetchReddit();
-    const rdResult = await processUpdates(rdUpdates, "Reddit");
-    runStats.added += rdResult.added;
-    runStats.skipped += rdResult.skipped;
-    runStats.errors += rdResult.errors;
-    log("INFO", `Reddit done → +${rdResult.added} new, ${rdResult.skipped} skipped, ${rdResult.errors} errors`);
-  } catch (err) {
-    runStats.errors++;
-    log("ERROR", `Reddit fetch crashed: ${err.message}`);
-  }
+ // log("INFO", "Fetching from Reddit...");
+  //try {
+ //   const rdUpdates = await fetchReddit();
+ //   const rdResult = await processUpdates(rdUpdates, "Reddit");
+ //   runStats.added += rdResult.added;
+ //   runStats.skipped += rdResult.skipped;
+//    runStats.errors += rdResult.errors;
+//    log("INFO", `Reddit done → +${rdResult.added} new, ${rdResult.skipped} skipped, ${rdResult.errors} errors`);
+ // } catch (err) {
+ //   runStats.errors++;
+ //   log("ERROR", `Reddit fetch crashed: ${err.message}`);
+ // }
 
   // ── SOURCE 3: Twitter/X (optional) ──────────────────────
   log("INFO", "Fetching from Twitter/X...");

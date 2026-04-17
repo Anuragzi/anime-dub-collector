@@ -41,11 +41,20 @@ const SKIP_KEYWORDS = [
 ];
 
 const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 2000;
+const RETRY_DELAY_MS = 3000;
 
 async function sleep(ms) {
   return new Promise((res) => setTimeout(res, ms));
 }
+
+// Enhanced headers to avoid 403
+const getHeaders = () => ({
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Accept": "application/json",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Cache-Control": "no-cache",
+  "Connection": "keep-alive",
+});
 
 async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -54,20 +63,20 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
         ...options,
         timeout: 15000,
         headers: {
-          // Reddit requires a user-agent string
-          "User-Agent": "AnimeDubTrackerBot/1.0 (by /u/AnimeDubTrackerApp)",
+          ...getHeaders(),
           ...options.headers,
         },
       });
       return res.data;
     } catch (err) {
       const status = err.response?.status;
+      const retryAfter = err.response?.headers?.["retry-after"];
 
-      // Reddit rate limit
-      if (status === 429) {
-        const retryAfter = parseInt(err.response.headers["retry-after"] || "60");
-        console.warn(`  [Reddit] Rate limited — waiting ${retryAfter}s`);
-        await sleep(retryAfter * 1000);
+      // Reddit rate limit - 403 or 429
+      if (status === 429 || status === 403) {
+        const waitTime = retryAfter ? parseInt(retryAfter) * 1000 : RETRY_DELAY_MS * attempt;
+        console.warn(`  [Reddit] Rate limited (${status}) — waiting ${waitTime / 1000}s before retry ${attempt}/${retries}`);
+        await sleep(waitTime);
         continue;
       }
 
@@ -220,8 +229,8 @@ async function fetchReddit() {
 
     allPosts.push(...posts);
 
-    // Small delay between subreddits to be polite
-    await sleep(1500);
+    // Delay between subreddits to avoid rate limiting
+    await sleep(2000);
   }
 
   console.log(`  [Reddit] Total raw posts: ${allPosts.length}`);

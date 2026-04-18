@@ -12,6 +12,19 @@
 // This ensures the same anime+episode is never stored twice.
 // ============================================================
 
+const express = require("express");
+const app = express();
+
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Anime Dub Collector is running 🚀");
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
 require("dotenv").config();
 
 const cron = require("node-cron");

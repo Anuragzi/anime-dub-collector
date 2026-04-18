@@ -11,7 +11,6 @@
 //      — it referenced extractAnimeTitle which wasn't exported,
 //        causing a crash at require-time before main() ran.
 //   4. Reddit kept commented but import also removed cleanly.
-//   5. Kitsu.io added as free source (no API key required)
 // ============================================================
 
 // ====== MUST BE FIRST — loads .env before anything else ======
@@ -40,8 +39,10 @@ const cron = require("node-cron");
 const { initFirebase, getDb } = require("./firebase");
 const { fetchAnimeSchedule } = require("./services/fetchAnimeSchedule");
 const fetchRSS = require("./services/fetchRSS");
-const { fetchKitsu } = require("./services/fetchKitsu");  // ✅ ADDED
 
+// Inside runCollection():
+const rssUpdates = await fetchRSS();
+const rssResult  = await processUpdates(rssUpdates, "RSS");
 // Reddit disabled — uncomment below + in runCollection() to re-enable
 // const { fetchReddit } = require("./services/fetchReddit");
 
@@ -206,35 +207,7 @@ async function runCollection() {
     log("ERROR", `AnimeSchedule crashed: ${err.message}`);
   }
 
-  // ── SOURCE 2: RSS Feeds ──────────────────────────────────
-  log("INFO", "Fetching from RSS Feeds...");
-  try {
-    const updates = await fetchRSS();
-    const result  = await processUpdates(updates, "RSS");
-    runStats.added   += result.added;
-    runStats.skipped += result.skipped;
-    runStats.errors  += result.errors;
-    log("INFO", `RSS → +${result.added} new | ${result.skipped} skipped | ${result.errors} errors`);
-  } catch (err) {
-    runStats.errors++;
-    log("ERROR", `RSS crashed: ${err.message}`);
-  }
-
-  // ── SOURCE 3: Kitsu.io (free, no API key) ────────────────
-  log("INFO", "Fetching from Kitsu.io...");
-  try {
-    const updates = await fetchKitsu();
-    const result  = await processUpdates(updates, "Kitsu");
-    runStats.added   += result.added;
-    runStats.skipped += result.skipped;
-    runStats.errors  += result.errors;
-    log("INFO", `Kitsu → +${result.added} new | ${result.skipped} skipped | ${result.errors} errors`);
-  } catch (err) {
-    runStats.errors++;
-    log("ERROR", `Kitsu crashed: ${err.message}`);
-  }
-
-  // ── SOURCE 4: Reddit (disabled — uncomment to enable) ────
+  // ── SOURCE 2: Reddit (disabled — uncomment to enable) ────
   // log("INFO", "Fetching from Reddit...");
   // try {
   //   const updates = await fetchReddit();
@@ -248,7 +221,7 @@ async function runCollection() {
   //   log("ERROR", `Reddit crashed: ${err.message}`);
   // }
 
-  // ── SOURCE 5: Twitter/X (skips if token not set) ─────────
+  // ── SOURCE 3: Twitter/X (skips if token not set) ─────────
   log("INFO", "Fetching from Twitter/X...");
   try {
     const updates = await fetchTwitter();

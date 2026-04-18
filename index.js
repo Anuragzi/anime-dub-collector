@@ -1,46 +1,64 @@
 // ============================================================
 // index.js — Anime Dub News Collector (Main Runner)
 // ============================================================
-// Runs every 20 minutes and:
-//   1. Fetches dub updates from AnimeSchedule, Reddit, Twitter
-//   2. Normalizes and deduplicates them
-//   3. Stores new ones in Firestore "dub_updates" collection
-//   4. Logs everything clearly
-//
-// Each Firestore document has a unique ID based on:
-//   normalizedTitle + episode number
-// This ensures the same anime+episode is never stored twice.
+// FIXES APPLIED:
+//   1. require("dotenv").config() is NOW THE FIRST LINE
+//      — previously it ran after Express, so all process.env
+//        values were undefined when services checked them.
+//   2. express added to package.json dependencies (was missing)
+//      — Railway was SIGTERMing because npm install failed.
+//   3. fetchTwitter import wrapped in try/catch
+//      — it referenced extractAnimeTitle which wasn't exported,
+//        causing a crash at require-time before main() ran.
+//   4. Reddit kept commented but import also removed cleanly.
 // ============================================================
 
+// ====== MUST BE FIRST — loads .env before anything else ======
+require("dotenv").config();
+
+// ====== EXPRESS (RAILWAY KEEP-ALIVE) ========================
 const express = require("express");
 const app = express();
-
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (req, res) => {
-  res.send("Anime Dub Collector is running 🚀");
+  res.json({
+    status: "running",
+    service: "Anime Dub News Collector",
+    lastRun: stats?.lastRun || "not yet",
+    totalAdded: stats?.totalAdded || 0,
+  });
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`✅ Express keep-alive server running on port ${PORT}`);
 });
 
-require("dotenv").config();
-
+// ====== IMPORTS =============================================
 const cron = require("node-cron");
 const { initFirebase, getDb } = require("./firebase");
 const { fetchAnimeSchedule } = require("./services/fetchAnimeSchedule");
+// Reddit disabled — uncomment below + in runCollection() to re-enable
 // const { fetchReddit } = require("./services/fetchReddit");
-const { fetchTwitter } = require("./services/fetchTwitter");
+
+// FIX: wrap Twitter import — crashes at require-time if util exports are missing
+let fetchTwitter;
+try {
+  fetchTwitter = require("./services/fetchTwitter").fetchTwitter;
+} catch (err) {
+  console.warn(`⚠️  fetchTwitter failed to load: ${err.message} — Twitter source disabled`);
+  fetchTwitter = async () => [];   // safe no-op fallback
+}
+
 const { makeDocId } = require("./utils/normalizeTitle");
 
-// ====== CONFIG ======
+// ====== CONFIG ==============================================
 const COLLECTION_NAME = "dub_updates";
-const RUN_INTERVAL_CRON = "*/20 * * * *"; // every 20 minutes
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // only keep updates < 7 days old
+const RUN_INTERVAL_CRON = "*/20 * * * *";             // every 20 minutes
+const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;          // ignore updates > 7 days old
 
 // ============================================================
-// ====== LOGGING =============================================
+// ====== STATS + LOGGING =====================================
 // ============================================================
 const stats = {
   totalRuns: 0,
@@ -53,51 +71,36 @@ const stats = {
 function log(level, msg) {
   const ts = new Date().toISOString();
   const prefix = {
-    INFO: "ℹ️ ",
-    OK: "✅",
-    SKIP: "⏭ ",
-    WARN: "⚠️ ",
-    ERROR: "❌",
-    HEADER: "═══",
+    INFO:   "ℹ️ ",
+    OK:     "✅",
+    SKIP:   "⏭ ",
+    WARN:   "⚠️ ",
+    ERROR:  "❌",
   }[level] || "  ";
   console.log(`[${ts}] ${prefix} ${msg}`);
 }
 
 function logHeader(title) {
-  const line = "═".repeat(50);
-  console.log(`\n${line}`);
-  console.log(`  ${title}`);
-  console.log(`${line}`);
+  const line = "═".repeat(55);
+  console.log(`\n${line}\n  ${title}\n${line}`);
 }
 
 // ============================================================
-// ====== DEDUPLICATION + STORAGE =============================
+// ====== VALIDATION ==========================================
 // ============================================================
-
-/**
- * Validates a parsed update has all required fields.
- */
 function isValidUpdate(update) {
   if (!update) return false;
   if (!update.title || update.title.length < 2) return false;
   if (!update.source) return false;
   if (!update.language) return false;
   if (!update.type) return false;
-
-  // Skip updates older than MAX_AGE_MS
   if (update.timestamp && Date.now() - update.timestamp > MAX_AGE_MS) return false;
-
   return true;
 }
 
-/**
- * Saves a single dub update to Firestore.
- * Uses the docId as the document ID — if it already exists,
- * the write is skipped (no overwrite of older data).
- *
- * @param {object} update - Structured dub update
- * @returns {"added"|"skipped"|"error"}
- */
+// ============================================================
+// ====== FIRESTORE SAVE (deduplication by docId) =============
+// ============================================================
 async function saveUpdate(update) {
   const db = getDb();
   const docId = makeDocId(update.title, update.episode);
@@ -115,9 +118,7 @@ async function saveUpdate(update) {
       return "skipped";
     }
 
-    // Build the clean document
     const document = {
-      // Core fields (required)
       title: update.title,
       normalizedTitle: update.normalizedTitle || update.title.toLowerCase(),
       episode: update.episode ?? null,
@@ -126,17 +127,16 @@ async function saveUpdate(update) {
       source: update.source,
       timestamp: update.timestamp || Date.now(),
 
-      // Optional enrichment fields
-      ...(update.nextEpisode !== undefined && { nextEpisode: update.nextEpisode }),
-      ...(update.nextEpisodeDate && { nextEpisodeDate: update.nextEpisodeDate }),
-      ...(update.totalEpisodes && { totalEpisodes: update.totalEpisodes }),
-      ...(update.status && { sourceStatus: update.status }),
-      ...(update.sourceRoute && { sourceRoute: update.sourceRoute }),
-      ...(update.redditUrl && { redditUrl: update.redditUrl }),
-      ...(update.rawTitle && { rawTitle: update.rawTitle }),
-      ...(update.tweetId && { tweetId: update.tweetId }),
+      // Optional fields — only included if present
+      ...(update.nextEpisode     !== undefined && { nextEpisode: update.nextEpisode }),
+      ...(update.nextEpisodeDate &&               { nextEpisodeDate: update.nextEpisodeDate }),
+      ...(update.totalEpisodes   &&               { totalEpisodes: update.totalEpisodes }),
+      ...(update.status          &&               { sourceStatus: update.status }),
+      ...(update.sourceRoute     &&               { sourceRoute: update.sourceRoute }),
+      ...(update.redditUrl       &&               { redditUrl: update.redditUrl }),
+      ...(update.rawTitle        &&               { rawTitle: update.rawTitle }),
+      ...(update.tweetId         &&               { tweetId: update.tweetId }),
 
-      // Metadata
       collectedAt: Date.now(),
       docId,
     };
@@ -149,12 +149,9 @@ async function saveUpdate(update) {
   }
 }
 
-/**
- * Processes an array of updates — validates, deduplicates, saves.
- * @param {Array} updates
- * @param {string} sourceName - for logging
- * @returns {{ added, skipped, errors }}
- */
+// ============================================================
+// ====== PROCESS A BATCH OF UPDATES ==========================
+// ============================================================
 async function processUpdates(updates, sourceName) {
   let added = 0, skipped = 0, errors = 0;
 
@@ -168,7 +165,7 @@ async function processUpdates(updates, sourceName) {
 
     if (result === "added") {
       added++;
-      log("OK", `[${sourceName}] NEW: "${update.title}" | Ep ${update.episode ?? "?"} | Type: ${update.type}`);
+      log("OK",   `[${sourceName}] NEW: "${update.title}" | Ep ${update.episode ?? "?"} | ${update.type}`);
     } else if (result === "skipped") {
       skipped++;
       log("SKIP", `[${sourceName}] DUP: "${update.title}" | Ep ${update.episode ?? "?"}`);
@@ -187,61 +184,61 @@ async function runCollection() {
   stats.totalRuns++;
   stats.lastRun = new Date().toISOString();
 
-  logHeader(`🎌 Anime Dub Collector — Run #${stats.totalRuns} | ${stats.lastRun}`);
+  logHeader(`🎌 Dub Collector — Run #${stats.totalRuns} | ${stats.lastRun}`);
 
   const runStats = { added: 0, skipped: 0, errors: 0 };
 
-  // ── SOURCE 1: AnimeSchedule.net ─────────────────────────
+  // ── SOURCE 1: AnimeSchedule.net ──────────────────────────
   log("INFO", "Fetching from AnimeSchedule.net...");
   try {
-    const asUpdates = await fetchAnimeSchedule();
-    const asResult = await processUpdates(asUpdates, "AnimeSchedule");
-    runStats.added += asResult.added;
-    runStats.skipped += asResult.skipped;
-    runStats.errors += asResult.errors;
-    log("INFO", `AnimeSchedule done → +${asResult.added} new, ${asResult.skipped} skipped, ${asResult.errors} errors`);
+    const updates = await fetchAnimeSchedule();
+    const result  = await processUpdates(updates, "AnimeSchedule");
+    runStats.added   += result.added;
+    runStats.skipped += result.skipped;
+    runStats.errors  += result.errors;
+    log("INFO", `AnimeSchedule → +${result.added} new | ${result.skipped} skipped | ${result.errors} errors`);
   } catch (err) {
     runStats.errors++;
-    log("ERROR", `AnimeSchedule fetch crashed: ${err.message}`);
+    log("ERROR", `AnimeSchedule crashed: ${err.message}`);
   }
 
-  // ── SOURCE 2: Reddit ────────────────────────────────────
- // log("INFO", "Fetching from Reddit...");
-  //try {
- //   const rdUpdates = await fetchReddit();
- //   const rdResult = await processUpdates(rdUpdates, "Reddit");
- //   runStats.added += rdResult.added;
- //   runStats.skipped += rdResult.skipped;
-//    runStats.errors += rdResult.errors;
-//    log("INFO", `Reddit done → +${rdResult.added} new, ${rdResult.skipped} skipped, ${rdResult.errors} errors`);
- // } catch (err) {
- //   runStats.errors++;
- //   log("ERROR", `Reddit fetch crashed: ${err.message}`);
- // }
+  // ── SOURCE 2: Reddit (disabled — uncomment to enable) ────
+  // log("INFO", "Fetching from Reddit...");
+  // try {
+  //   const updates = await fetchReddit();
+  //   const result  = await processUpdates(updates, "Reddit");
+  //   runStats.added   += result.added;
+  //   runStats.skipped += result.skipped;
+  //   runStats.errors  += result.errors;
+  //   log("INFO", `Reddit → +${result.added} new | ${result.skipped} skipped | ${result.errors} errors`);
+  // } catch (err) {
+  //   runStats.errors++;
+  //   log("ERROR", `Reddit crashed: ${err.message}`);
+  // }
 
-  // ── SOURCE 3: Twitter/X (optional) ──────────────────────
+  // ── SOURCE 3: Twitter/X (skips if token not set) ─────────
   log("INFO", "Fetching from Twitter/X...");
   try {
-    const twUpdates = await fetchTwitter();
-    const twResult = await processUpdates(twUpdates, "Twitter");
-    runStats.added += twResult.added;
-    runStats.skipped += twResult.skipped;
-    runStats.errors += twResult.errors;
-    log("INFO", `Twitter done → +${twResult.added} new, ${twResult.skipped} skipped, ${twResult.errors} errors`);
+    const updates = await fetchTwitter();
+    const result  = await processUpdates(updates, "Twitter");
+    runStats.added   += result.added;
+    runStats.skipped += result.skipped;
+    runStats.errors  += result.errors;
+    log("INFO", `Twitter → +${result.added} new | ${result.skipped} skipped | ${result.errors} errors`);
   } catch (err) {
     runStats.errors++;
-    log("ERROR", `Twitter fetch crashed: ${err.message}`);
+    log("ERROR", `Twitter crashed: ${err.message}`);
   }
 
-  // ── RUN SUMMARY ─────────────────────────────────────────
-  stats.totalAdded += runStats.added;
+  // ── SUMMARY ──────────────────────────────────────────────
+  stats.totalAdded   += runStats.added;
   stats.totalSkipped += runStats.skipped;
-  stats.totalErrors += runStats.errors;
+  stats.totalErrors  += runStats.errors;
 
   logHeader(`📊 Run #${stats.totalRuns} Complete`);
-  console.log(`  This run  → ✅ ${runStats.added} added | ⏭  ${runStats.skipped} skipped | ❌ ${runStats.errors} errors`);
-  console.log(`  All time  → ✅ ${stats.totalAdded} added | ⏭  ${stats.totalSkipped} skipped | ❌ ${stats.totalErrors} errors`);
-  console.log(`  Next run  → in 20 minutes\n`);
+  console.log(`  This run → ✅ ${runStats.added} added | ⏭  ${runStats.skipped} skipped | ❌ ${runStats.errors} errors`);
+  console.log(`  All time → ✅ ${stats.totalAdded} added | ⏭  ${stats.totalSkipped} skipped | ❌ ${stats.totalErrors} errors`);
+  console.log(`  Next run → in 20 minutes\n`);
 }
 
 // ============================================================
@@ -249,18 +246,18 @@ async function runCollection() {
 // ============================================================
 async function main() {
   logHeader("🚀 Anime Dub News Collector — Starting Up");
+  console.log(`  Port     : ${PORT}`);
   console.log(`  Interval : every 20 minutes`);
-  console.log(`  Sources  : AnimeSchedule.net, Reddit, Twitter/X`);
   console.log(`  Firestore: "${COLLECTION_NAME}" collection`);
-  console.log(`  AnimeSchedule key: ${process.env.ANIMESCHEDULE_KEY ? "✅ set" : "❌ MISSING"}`);
-  console.log(`  Twitter token: ${process.env.TWITTER_BEARER_TOKEN ? "✅ set" : "⚠️  not set (optional)"}`);
-  console.log(`  Firebase key: ${process.env.FIREBASE_KEY ? "✅ set" : "❌ MISSING"}`);
+  console.log(`  ANIMESCHEDULE_KEY  : ${process.env.ANIMESCHEDULE_KEY   ? "✅ set" : "❌ MISSING — dub data won't work!"}`);
+  console.log(`  FIREBASE_KEY       : ${process.env.FIREBASE_KEY        ? "✅ set" : "❌ MISSING — nothing will save!"}`);
+  console.log(`  TWITTER_BEARER_TOKEN: ${process.env.TWITTER_BEARER_TOKEN ? "✅ set" : "⚠️  not set (Twitter skipped)"}`);
 
-  // Connect Firebase
+  // Init Firebase
   initFirebase();
 
   // Run immediately on startup
-  log("INFO", "Running first collection immediately...");
+  log("INFO", "Running first collection now...");
   await runCollection();
 
   // Schedule recurring runs
@@ -268,10 +265,10 @@ async function main() {
     await runCollection();
   });
 
-  log("INFO", `Scheduler active — running every 20 minutes`);
+  log("INFO", "Scheduler active — next run in 20 minutes");
 }
 
-// ====== GLOBAL ERROR HANDLERS ======
+// ====== CRASH GUARDS ========================================
 process.on("unhandledRejection", (reason) => {
   log("ERROR", `Unhandled rejection: ${reason}`);
   stats.totalErrors++;

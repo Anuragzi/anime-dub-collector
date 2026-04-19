@@ -134,6 +134,15 @@ async function enrichBatch(updates) {
     return updates || [];
   }
 
+  // Quick health check - try one request to see if API is working
+  try {
+    const testResult = await searchHiAnime("test");
+    // If we get here, API is working
+  } catch (err) {
+    console.log(`[HiAnime Enrich] ⚠️ API unavailable (${err.message}) — skipping enrichment for ${updates.length} items`);
+    return updates; // Return original updates without enrichment
+  }
+
   console.log(`[HiAnime Enrich] Starting batch enrichment for ${updates.length} items...`);
 
   const stats = { enriched: 0, skipped: 0, failed: 0 };

@@ -47,6 +47,7 @@ try {
 }
 
 const { makeDocId } = require("./utils/normalizeTitle");
+const { enrichBatch } = require("./services/enrichWithHiAnime");
 
 // ====== CONFIG ==============================================
 const COLLECTION_NAME = "dub_updates";
@@ -160,7 +161,8 @@ async function runCollection() {
   // AnimeSchedule
   try {
     const updates = await fetchAnimeSchedule();
-    const result = await processUpdates(updates, "AnimeSchedule");
+    const enrichedUpdates = await enrichBatch(updates);
+    const result = await processUpdates(enrichedUpdates, "AnimeSchedule");
     Object.keys(runStats).forEach(k => runStats[k] += result[k]);
   } catch (err) {
     log("ERROR", err.message);

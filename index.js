@@ -47,7 +47,6 @@ try {
 }
 
 const { makeDocId } = require("./utils/normalizeTitle");
-const { enrichBatch } = require("./services/enrichWithHiAnime");
 
 // ====== CONFIG ==============================================
 const COLLECTION_NAME = "dub_updates";

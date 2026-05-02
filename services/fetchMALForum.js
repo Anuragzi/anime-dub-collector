@@ -1,121 +1,161 @@
 // ============================================================
-// fetchMALForum.js — Working scraper for MAL forum
+// fetchMALForum.js — Direct text extraction from MAL forum
 // ============================================================
 
 const MAL_TOPIC_URL = "https://myanimelist.net/forum/?topicid=1692966";
 
 async function fetchMALForum() {
-  console.log("\n🔍 ===== MAL FORUM SCRAPE =====");
+  console.log("\n🔍 ===== MAL FORUM SCRAPE (Direct Text) =====");
   
   try {
     const response = await fetch(MAL_TOPIC_URL, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }
+      headers: { 
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
     });
     
     const html = await response.text();
     
-    // Try MULTIPLE patterns to find the post content
-    let postText = "";
-    
-    // Pattern 1: Modern MAL structure
-    let match = html.match(/<div[^>]*class="[^"]*message-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    
-    // Pattern 2: Alternative class
+    // Extract the first post's content div
+    let match = html.match(/<div class="forum-board-message-text">([\s\S]*?)<\/div>/);
     if (!match) {
-      match = html.match(/<td[^>]*class="[^"]*forum_board_content[^"]*"[^>]*>([\s\S]*?)<\/td>/i);
-    }
-    
-    // Pattern 3: Look for the first post's content div
-    if (!match) {
-      match = html.match(/<div class="forum-board-message-text">([\s\S]*?)<\/div>/);
-    }
-    
-    // Pattern 4: Extract ANY large text block that looks like the dub list
-    if (!match) {
-      const textMatch = html.match(/(Currently Streaming SimulDubbed Anime[\s\S]*?Announced Dubbed Anime[\s\S]*?<\/div>)/);
-      if (textMatch) postText = textMatch[1];
-    }
-    
-    if (match) {
-      postText = match[1];
-    }
-    
-    if (!postText || postText.length < 500) {
-      console.log("❌ Could not find post content, trying raw text extraction...");
-      
-      // Fallback: Remove all HTML and search for known text
-      const plainText = html.replace(/<[^>]*>/g, ' ');
-      
-      if (plainText.includes("Currently Streaming SimulDubbed Anime")) {
-        // Extract from "Currently Streaming" to "Released Dubbed Anime"
-        const start = plainText.indexOf("Currently Streaming SimulDubbed Anime");
-        const end = plainText.indexOf("Released Dubbed Anime", start);
-        if (start !== -1 && end !== -1) {
-          postText = plainText.substring(start, end);
-          console.log("✅ Extracted via raw text fallback");
-        }
-      }
-    }
-    
-    if (!postText || postText.length < 100) {
-      console.log("❌ Still cannot find content. MAL may have changed their layout.");
+      console.log("❌ Could not find post content");
       return [];
     }
     
-    // Clean and parse
-    let text = postText
+    // Convert HTML to plain text
+    let text = match[1]
       .replace(/<br\s*\/?>/g, "\n")
       .replace(/<[^>]*>/g, "")
       .replace(/&amp;/g, "&")
-      .replace(/\s+/g, " ")
-      .replace(/•/g, "-");
+      .replace(/&nbsp;/g, " ")
+      .replace(/\r/g, "")
+      .replace(/\n\s*\n/g, "\n");
     
     const updates = [];
-    let currentSection = null;
-    const lines = text.split(/\n|\.\s+(?=-)/);
     
-    for (const line of lines) {
-      const trimmed = line.trim();
+    // Helper to extract titles from a section
+    function extractFromSection(sectionName, startMarker, endMarker, type) {
+      // Find the section
+      const startIndex = text.indexOf(startMarker);
+      if (startIndex === -1) return;
       
-      if (trimmed.includes("Currently Streaming")) currentSection = "streaming";
-      else if (trimmed.includes("Upcoming SimulDubbed Anime for Spring")) currentSection = "simuldub";
-      else if (trimmed.includes("Upcoming SimulDubbed Anime for Summer")) currentSection = "simuldub";
-      else if (trimmed.includes("Upcoming Dubbed Anime")) currentSection = "upcoming";
-      else if (trimmed.includes("Announced Dubbed Anime")) currentSection = "announced";
+      let endIndex = text.indexOf(endMarker, startIndex);
+      if (endIndex === -1) endIndex = text.length;
       
-      // Match patterns like "- Anime Name - May 2, 2026" or "- Anime Name"
-      const bulletMatch = trimmed.match(/^[-–•]\s*(.+?)(?:\s+-\s+(.+?))?$/);
-      if (bulletMatch && currentSection) {
-        let title = bulletMatch[1].trim();
-        const dateStr = bulletMatch[2]?.trim();
+      const sectionText = text.substring(startIndex, endIndex);
+      const lines = sectionText.split("\n");
+      
+      for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
         
-        // Clean up title
-        title = title.replace(/\*+$/, "").trim();
-        if (title.length > 2 && !title.match(/^\d+$/)) {
+        // Skip lines that are just numbers or headers
+        if (line.match(/^\d+$/)) continue;
+        if (line.includes("Not confirmed")) continue;
+        if (line.match(/^[-•]\s*\d+$/)) continue;
+        
+        // Remove bullet points
+        let cleanLine = line.replace(/^[-•]\s*/, "");
+        
+        // Extract title and date
+        let title = null;
+        let releaseDate = null;
+        let status = "confirmed";
+        
+        // Pattern: "Title - Month Day, Year"
+        const dateMatch = cleanLine.match(/^(.+?)\s+-\s+([A-Za-z]+\s+\d{1,2}[,.]?\s+\d{4})/);
+        if (dateMatch) {
+          title = dateMatch[1].trim();
+          releaseDate = dateMatch[2].trim().replace(/\./, ",");
+        } 
+        // Pattern: Just a title (no date)
+        else if (cleanLine.length > 3 && !cleanLine.match(/^\d/)) {
+          title = cleanLine;
+        }
+        
+        // Check for unconfirmed status
+        if (title && title.endsWith("*")) {
+          status = "unconfirmed";
+          title = title.slice(0, -1).trim();
+        }
+        
+        // Skip weekdays and short words
+        if (title && title.length > 2 && !title.match(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/i)) {
           updates.push({
             title: title,
-            type: currentSection,
+            episode: null,
+            type: type,
             language: "English Dub",
             source: "MAL-Forum",
-            timestamp: dateStr ? Date.parse(dateStr) || Date.now() : Date.now(),
-            releaseDate: dateStr || null,
-            status: line.includes("*") ? "unconfirmed" : "confirmed"
+            timestamp: releaseDate ? Date.parse(releaseDate) || Date.now() : Date.now(),
+            releaseDate: releaseDate || null,
+            status: status,
+            section: sectionName
           });
         }
       }
     }
     
-    console.log(`✅ Scraped ${updates.length} dubbed anime entries`);
+    // Extract from each section
+    console.log("📋 Processing sections...");
     
-    if (updates.length === 0) {
-      console.log("⚠️ No entries found. The forum format may have changed.");
-      // Log a sample of cleaned text for debugging
-      console.log("Sample of cleaned text:", text.substring(0, 500));
-    } else {
-      console.log(`📋 First 3: ${updates.slice(0, 3).map(u => u.title).join(", ")}`);
+    // Spring 2026 SimulDubs
+    extractFromSection(
+      "Spring 2026",
+      "Upcoming SimulDubbed Anime for Spring 2026",
+      "Upcoming SimulDubbed Anime for Summer",
+      "simuldub_spring"
+    );
+    
+    // Summer 2026 SimulDubs
+    extractFromSection(
+      "Summer 2026",
+      "Upcoming SimulDubbed Anime for Summer 2026",
+      "Upcoming Dubbed Anime",
+      "simuldub_summer"
+    );
+    
+    // Upcoming Dubbed Anime
+    extractFromSection(
+      "Upcoming",
+      "Upcoming Dubbed Anime",
+      "Released Dubbed Anime Awaiting Streaming",
+      "upcoming"
+    );
+    
+    // Announced Dubbed Anime
+    extractFromSection(
+      "Announced",
+      "Announced Dubbed Anime",
+      "Released Dubbed Anime",
+      "announced"
+    );
+    
+    // Remove duplicates (same title in multiple sections)
+    const uniqueTitles = new Map();
+    for (const update of updates) {
+      const key = update.title.toLowerCase();
+      if (!uniqueTitles.has(key)) {
+        uniqueTitles.set(key, update);
+      }
     }
     
-    return updates;
+    const finalUpdates = Array.from(uniqueTitles.values());
+    
+    console.log(`✅ Scraped ${finalUpdates.length} unique dub entries`);
+    
+    if (finalUpdates.length > 0) {
+      console.log(`📋 Examples:`);
+      finalUpdates.slice(0, 10).forEach((u, i) => {
+        console.log(`   ${i+1}. ${u.title}${u.releaseDate ? ` (${u.releaseDate})` : ""} [${u.type}]`);
+      });
+    } else {
+      console.log("⚠️ No entries found. Sample text (first 500 chars):");
+      console.log(text.substring(0, 500));
+    }
+    
+    return finalUpdates;
     
   } catch (err) {
     console.log(`❌ Scrape failed: ${err.message}`);

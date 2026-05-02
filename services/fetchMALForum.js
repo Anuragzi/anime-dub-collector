@@ -110,7 +110,7 @@ async function fetchMALForum() {
   console.log("\n🔍 ===== MAL FORUM FETCH (via Jikan API) =====");
   
   try {
-    // Jikan API endpoint for forum topics
+    // ✅ CORRECT ENDPOINT: /forum/topic/{id}
     const url = `${JIKAN_API_BASE}/forum/topic/${MAL_TOPIC_ID}`;
     console.log(`📡 Fetching URL: ${url}`);
     
@@ -125,23 +125,26 @@ async function fetchMALForum() {
     
     const data = await response.json();
     
-    if (!data.data || !data.data.replies) {
-      console.log("⚠️ No replies found in topic via Jikan API");
+    // Check the response structure
+    console.log(`📦 Response data keys: ${Object.keys(data)}`);
+    
+    if (!data.data) {
+      console.log("⚠️ No data found in response");
       return [];
     }
     
-    console.log(`✅ Found ${data.data.replies.length} posts in topic`);
-    
-    // Find the first post (index 0 is the OP)
-    const firstPost = data.data.replies[0];
+    // Get the first post (original post)
+    const topicData = data.data;
+    const firstPost = topicData;
     const body = firstPost?.body || "";
+    
+    console.log(`✅ Topic title: ${topicData.title || 'N/A'}`);
+    console.log(`📄 Post body length: ${body.length} characters`);
     
     if (!body) {
       console.log("⚠️ First post body is empty");
       return [];
     }
-    
-    console.log(`📄 Post body length: ${body.length} characters`);
     
     const updates = parseForumPost(body);
     console.log(`📊 Final result: ${updates.length} dub entries parsed`);
@@ -151,6 +154,12 @@ async function fetchMALForum() {
       updates.slice(0, 3).forEach((u, i) => {
         console.log(`   ${i+1}. ${u.title} (${u.type})`);
       });
+    } else {
+      // Debug: Show first 500 chars of body to understand format
+      console.log(`\n📄 First 500 chars of forum post (for debugging):`);
+      console.log("─".repeat(50));
+      console.log(body.substring(0, 500));
+      console.log("─".repeat(50));
     }
     
     // Respect Jikan API rate limits

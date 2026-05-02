@@ -195,7 +195,7 @@ async function runCollection() {
     log("ERROR", `Twitter failed: ${err.message}`);
   }
 
-  // ====== NEW: MAL FORUM SOURCE ======
+  // MAL Forum
   try {
     const updates = await fetchMALForum();
     const result = await processUpdates(updates, "MAL-Forum");

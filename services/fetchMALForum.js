@@ -1,98 +1,13 @@
 // ============================================================
-// fetchMALForum.js — Fetch and parse dubbed anime from MAL forum thread
+// fetchMALForum.js — Fetch dubbed anime from MAL forum thread using Jikan API
 // ============================================================
 
+const JIKAN_API_BASE = "https://api.jikan.moe/v4";
 const MAL_TOPIC_ID = "1692966";
-const MAL_API_BASE = "https://api.myanimelist.net/v2";
-const MAL_CLIENT_ID = process.env.MAL_CLIENT_ID;
 
-async function fetchMALForum() {
-  console.log("\n🔍 ===== MAL FORUM FETCH START =====");
-  
-  // Step 1: Check if Client ID exists
-  if (!MAL_CLIENT_ID) {
-    console.log("❌ MAL_CLIENT_ID is missing from environment variables");
-    return [];
-  }
-  
-  console.log(`✅ MAL_CLIENT_ID found: ${MAL_CLIENT_ID.substring(0, 5)}...${MAL_CLIENT_ID.substring(27)} (${MAL_CLIENT_ID.length} chars)`);
-  
-  // Step 2: Validate Client ID format
-  if (!/^[a-f0-9]{32}$/.test(MAL_CLIENT_ID)) {
-    console.log(`⚠️ WARNING: Client ID doesn't look like a valid MAL ID (should be 32 hex chars)`);
-  }
-  
-  try {
-    const url = `${MAL_API_BASE}/forum/topic/${MAL_TOPIC_ID}`;
-    console.log(`📡 Fetching URL: ${url}`);
-    
-    const response = await fetch(url, {
-      headers: {
-        "X-MAL-CLIENT-ID": MAL_CLIENT_ID
-      }
-    });
-    
-    console.log(`📡 Response status: ${response.status} ${response.statusText}`);
-    
-    // Step 3: Handle non-200 responses
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log(`❌ API Error Response Body: ${errorText.substring(0, 500)}`);
-      
-      if (response.status === 401) {
-        console.log("❌ Authentication failed! Your Client ID is invalid or revoked.");
-      } else if (response.status === 404) {
-        console.log("❌ Topic not found! Check if topic ID 1692966 is correct.");
-      } else if (response.status === 429) {
-        console.log("❌ Rate limited! Try again later.");
-      }
-      return [];
-    }
-    
-    const data = await response.json();
-    console.log(`✅ API call successful!`);
-    console.log(`📦 Response has ${data.posts?.length || 0} posts`);
-    
-    // Step 4: Extract post content
-    if (!data.posts || data.posts.length === 0) {
-      console.log("⚠️ No posts found in topic");
-      return [];
-    }
-    
-    const firstPost = data.posts[0];
-    const body = firstPost.body || firstPost.text || "";
-    console.log(`📄 Post #1 body length: ${body.length} characters`);
-    
-    if (body.length === 0) {
-      console.log("⚠️ Post body is empty!");
-      return [];
-    }
-    
-    // Step 5: Parse the content
-    const updates = parseForumPost(body);
-    console.log(`📊 Final result: ${updates.length} dub entries parsed`);
-    
-    if (updates.length > 0) {
-      console.log(`📋 First 3 entries:`);
-      updates.slice(0, 3).forEach((u, i) => {
-        console.log(`   ${i+1}. ${u.title} (${u.type})`);
-      });
-    } else {
-      // Debug: Show first 500 chars of body to see what went wrong
-      console.log(`\n📄 First 500 chars of forum post (for debugging):`);
-      console.log("─".repeat(50));
-      console.log(body.substring(0, 500));
-      console.log("─".repeat(50));
-    }
-    
-    console.log("🔍 ===== MAL FORUM FETCH END =====\n");
-    return updates;
-    
-  } catch (err) {
-    console.log(`❌ NETWORK/DNS ERROR: ${err.message}`);
-    console.log(`Stack trace: ${err.stack}`);
-    return [];
-  }
+// Rate limiting: Jikan API allows ~3 requests per second
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // Parse a date string like "May 2, 2026" or "May 15. 2026"
@@ -189,6 +104,65 @@ function parseForumPost(body) {
   }
   
   return updates;
+}
+
+async function fetchMALForum() {
+  console.log("\n🔍 ===== MAL FORUM FETCH (via Jikan API) =====");
+  
+  try {
+    // Jikan API endpoint for forum topics
+    const url = `${JIKAN_API_BASE}/forum/topic/${MAL_TOPIC_ID}`;
+    console.log(`📡 Fetching URL: ${url}`);
+    
+    const response = await fetch(url);
+    
+    console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+    
+    if (!response.ok) {
+      console.log(`❌ Jikan API error: ${response.status}`);
+      return [];
+    }
+    
+    const data = await response.json();
+    
+    if (!data.data || !data.data.replies) {
+      console.log("⚠️ No replies found in topic via Jikan API");
+      return [];
+    }
+    
+    console.log(`✅ Found ${data.data.replies.length} posts in topic`);
+    
+    // Find the first post (index 0 is the OP)
+    const firstPost = data.data.replies[0];
+    const body = firstPost?.body || "";
+    
+    if (!body) {
+      console.log("⚠️ First post body is empty");
+      return [];
+    }
+    
+    console.log(`📄 Post body length: ${body.length} characters`);
+    
+    const updates = parseForumPost(body);
+    console.log(`📊 Final result: ${updates.length} dub entries parsed`);
+    
+    if (updates.length > 0) {
+      console.log(`📋 First 3 entries:`);
+      updates.slice(0, 3).forEach((u, i) => {
+        console.log(`   ${i+1}. ${u.title} (${u.type})`);
+      });
+    }
+    
+    // Respect Jikan API rate limits
+    await delay(1000);
+    
+    console.log("🔍 ===== MAL FORUM FETCH END =====\n");
+    return updates;
+    
+  } catch (err) {
+    console.log(`❌ Jikan API error: ${err.message}`);
+    return [];
+  }
 }
 
 module.exports = fetchMALForum;

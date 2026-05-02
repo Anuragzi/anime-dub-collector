@@ -36,6 +36,7 @@ const cron = require("node-cron");
 const { initFirebase, getDb } = require("./firebase");
 const { fetchAnimeSchedule } = require("./services/fetchAnimeSchedule");
 const fetchRSS = require("./services/fetchRSS");
+const fetchMALForum = require("./services/fetchMALForum");
 
 // Twitter safe import
 let fetchTwitter;
@@ -82,6 +83,13 @@ function isValidUpdate(update) {
   return true;
 }
 
+// ====== ENRICHMENT HELPER ===================================
+async function enrichBatch(updates) {
+  // You can add enrichment logic here if needed (e.g., fetch missing episode counts)
+  // For now, just return as-is
+  return updates;
+}
+
 // ====== SAVE TO FIRESTORE ===================================
 async function saveUpdate(update) {
   const db = getDb();
@@ -110,6 +118,8 @@ async function saveUpdate(update) {
       ...(update.nextEpisode && { nextEpisode: update.nextEpisode }),
       ...(update.nextEpisodeDate && { nextEpisodeDate: update.nextEpisodeDate }),
       ...(update.totalEpisodes && { totalEpisodes: update.totalEpisodes }),
+      ...(update.releaseDate && { releaseDate: update.releaseDate }),
+      ...(update.status && { status: update.status }),
 
       collectedAt: Date.now(),
       docId,
@@ -137,7 +147,7 @@ async function processUpdates(updates, sourceName) {
 
     if (result === "added") {
       added++;
-      log("OK", `[${sourceName}] NEW: ${update.title} Ep ${update.episode}`);
+      log("OK", `[${sourceName}] NEW: ${update.title}${update.episode ? ` Ep ${update.episode}` : ""}${update.releaseDate ? ` (${update.releaseDate})` : ""}`);
     } else if (result === "skipped") {
       skipped++;
     } else {
@@ -164,16 +174,16 @@ async function runCollection() {
     const result = await processUpdates(enrichedUpdates, "AnimeSchedule");
     Object.keys(runStats).forEach(k => runStats[k] += result[k]);
   } catch (err) {
-    log("ERROR", err.message);
+    log("ERROR", `AnimeSchedule failed: ${err.message}`);
   }
 
-  // RSS ✅ FIXED (was causing crash before)
+  // RSS
   try {
     const updates = await fetchRSS();
     const result = await processUpdates(updates, "RSS");
     Object.keys(runStats).forEach(k => runStats[k] += result[k]);
   } catch (err) {
-    log("ERROR", err.message);
+    log("ERROR", `RSS failed: ${err.message}`);
   }
 
   // Twitter
@@ -182,7 +192,16 @@ async function runCollection() {
     const result = await processUpdates(updates, "Twitter");
     Object.keys(runStats).forEach(k => runStats[k] += result[k]);
   } catch (err) {
-    log("ERROR", err.message);
+    log("ERROR", `Twitter failed: ${err.message}`);
+  }
+
+  // ====== NEW: MAL FORUM SOURCE ======
+  try {
+    const updates = await fetchMALForum();
+    const result = await processUpdates(updates, "MAL-Forum");
+    Object.keys(runStats).forEach(k => runStats[k] += result[k]);
+  } catch (err) {
+    log("ERROR", `MAL-Forum failed: ${err.message}`);
   }
 
   stats.totalAdded += runStats.added;
@@ -190,7 +209,7 @@ async function runCollection() {
   stats.totalErrors += runStats.errors;
 
   logHeader("📊 Completed");
-  console.log(`Added: ${runStats.added} | Skipped: ${runStats.skipped}`);
+  console.log(`Added: ${runStats.added} | Skipped: ${runStats.skipped} | Errors: ${runStats.errors}`);
 }
 
 // ====== START ===============================================
@@ -203,16 +222,16 @@ async function main() {
 
   cron.schedule(RUN_INTERVAL_CRON, runCollection);
 
-  log("INFO", "Scheduler started (20 min)");
+  log("INFO", `Scheduler started (${RUN_INTERVAL_CRON})`);
 }
 
 // ====== ERROR HANDLING ======================================
 process.on("unhandledRejection", err => {
-  log("ERROR", err);
+  log("ERROR", `Unhandled rejection: ${err.message}`);
 });
 
 process.on("uncaughtException", err => {
-  log("ERROR", err);
+  log("ERROR", `Uncaught exception: ${err.message}`);
 });
 
 main();

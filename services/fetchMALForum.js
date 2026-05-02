@@ -1,14 +1,8 @@
 // ============================================================
-// fetchMALForum.js — Fetch dubbed anime from MAL forum thread using Jikan API
+// fetchMALForum.js — Scrape dubbed anime from MAL forum thread
 // ============================================================
 
-const JIKAN_API_BASE = "https://api.jikan.moe/v4";
-const MAL_TOPIC_ID = "1692966";
-
-// Rate limiting: Jikan API allows ~3 requests per second
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+const MAL_TOPIC_URL = "https://myanimelist.net/forum/?topicid=1692966";
 
 // Parse a date string like "May 2, 2026" or "May 15. 2026"
 function parseDubDate(dateStr) {
@@ -37,11 +31,44 @@ function parseLine(line) {
   return { title: cleaned, releaseDate: null, dateStr: null };
 }
 
-// Parse forum post body
-function parseForumPost(body) {
+// Parse forum post body from HTML
+function parseForumPostFromHTML(html) {
   const updates = [];
-  const lines = body.split(/\r?\n/);
   
+  // Extract the first post's content
+  // Look for the <div class="forum-board-message"> or similar
+  let postContent = "";
+  
+  // Method 1: Find the first post's message div
+  const msgMatch = html.match(/<div class="forum-board-message[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>\s*<div class="forum-board-footer/);
+  if (msgMatch) {
+    postContent = msgMatch[1];
+  }
+  
+  // Method 2: Fallback - extract plain text from the first post area
+  if (!postContent) {
+    const titleMatch = html.match(/<div class="forum-board-message clearfix">\s*<div class="forum-board-message-text">([\s\S]*?)<\/div>/);
+    if (titleMatch) {
+      postContent = titleMatch[1];
+    }
+  }
+  
+  if (!postContent) {
+    console.log("⚠️ Could not extract post content from HTML");
+    return [];
+  }
+  
+  // Clean HTML tags
+  let text = postContent
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+  
+  // Parse line by line
+  const lines = text.split(/\r?\n/);
   let currentSection = null;
   
   const sectionMap = {
@@ -107,46 +134,28 @@ function parseForumPost(body) {
 }
 
 async function fetchMALForum() {
-  console.log("\n🔍 ===== MAL FORUM FETCH (via Jikan API) =====");
+  console.log("\n🔍 ===== MAL FORUM FETCH (Direct Scrape) =====");
   
   try {
-    // ✅ CORRECT ENDPOINT: /forum/topic/{id}
-    const url = `${JIKAN_API_BASE}/forum/topic/${MAL_TOPIC_ID}`;
-    console.log(`📡 Fetching URL: ${url}`);
+    console.log(`📡 Fetching URL: ${MAL_TOPIC_URL}`);
     
-    const response = await fetch(url);
+    const response = await fetch(MAL_TOPIC_URL, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
+    });
     
-    console.log(`📡 Response status: ${response.status} ${response.statusText}`);
+    console.log(`📡 Response status: ${response.status}`);
     
     if (!response.ok) {
-      console.log(`❌ Jikan API error: ${response.status}`);
+      console.log(`❌ Failed to fetch: ${response.status}`);
       return [];
     }
     
-    const data = await response.json();
+    const html = await response.text();
+    console.log(`📄 HTML length: ${html.length} characters`);
     
-    // Check the response structure
-    console.log(`📦 Response data keys: ${Object.keys(data)}`);
-    
-    if (!data.data) {
-      console.log("⚠️ No data found in response");
-      return [];
-    }
-    
-    // Get the first post (original post)
-    const topicData = data.data;
-    const firstPost = topicData;
-    const body = firstPost?.body || "";
-    
-    console.log(`✅ Topic title: ${topicData.title || 'N/A'}`);
-    console.log(`📄 Post body length: ${body.length} characters`);
-    
-    if (!body) {
-      console.log("⚠️ First post body is empty");
-      return [];
-    }
-    
-    const updates = parseForumPost(body);
+    const updates = parseForumPostFromHTML(html);
     console.log(`📊 Final result: ${updates.length} dub entries parsed`);
     
     if (updates.length > 0) {
@@ -154,22 +163,13 @@ async function fetchMALForum() {
       updates.slice(0, 3).forEach((u, i) => {
         console.log(`   ${i+1}. ${u.title} (${u.type})`);
       });
-    } else {
-      // Debug: Show first 500 chars of body to understand format
-      console.log(`\n📄 First 500 chars of forum post (for debugging):`);
-      console.log("─".repeat(50));
-      console.log(body.substring(0, 500));
-      console.log("─".repeat(50));
     }
-    
-    // Respect Jikan API rate limits
-    await delay(1000);
     
     console.log("🔍 ===== MAL FORUM FETCH END =====\n");
     return updates;
     
   } catch (err) {
-    console.log(`❌ Jikan API error: ${err.message}`);
+    console.log(`❌ Scraping error: ${err.message}`);
     return [];
   }
 }
